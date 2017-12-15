@@ -1,0 +1,15 @@
+*.csv
+*.filepart
+*.xml
+*.bz2
+*.mat
+*.mexa64
+*.mexglx
+*.out
+*.txt
+dictionaries
+dict_out
+news
+twitter5
+vectorize_out
+prune_out

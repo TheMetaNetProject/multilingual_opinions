@@ -1,0 +1,249 @@
+ 
+'''
+Last modified on Nov 7, 2013
+
+@author: E.D. Gutierrez email: edg@icsi.berkeley.edu
+Treats each line as a document; turns a file into a term-document matrix and wordlist.
+'''
+import numpy
+import scipy.io
+
+lang = 'es'
+corpus_name = 'twitter'
+out_dir1 = '/u/metanet/clustering/multilingual_opinions/'+corpus_name+'/vectorize_out/'
+in_dir1 = '/u/metanet/clustering/multilingual_opinions/'+corpus_name+'/pos_split_out/'
+wordtypes= {'topic': ['noun'], 'opinion': ['verb','adjective']}  # the first Specify which parts of speech you want to do
+max_tokens = {'topic': 2e2, 'opinion': 1e2} # remove the top max_tokens words
+min_tokens = {'topic': 2e3, 'opinion': 1e3}# take the top min_tokens words excluding the top max_tokens words
+max_docs1 = 2e5
+# Main process: computes term and document vectors
+
+def compute_vecs(lang, min_tokens, max_tokens, wordtypes, out_dir = out_dir1, in_dir = in_dir1, max_docs = max_docs1, min_doc_length = 3, max_doc_length = 2e1):
+    print('run after pos_splitter.py; run dict_processor2.py or prune.mat next \n')
+    print lang
+    wordvec, docvec, vocab1, wordcounts, type_str, vocab_shorter = {}, {}, {}, {}, {}, {}
+    for type in wordtypes:
+        print type
+        type_str[type] = ''
+        in_filenames = {}
+        wordcounts[type], vocab1[type], wordvec[type], docvec[type] = [], [], [], []
+        oldmax = 0
+        for pos in wordtypes[type]:
+            type_str[type] += pos
+            in_filename = in_dir + pos + '_' + corpus_name + '_' + lang + '.txt'
+            large_matfile = out_dir + pos + '_' + corpus_name+'_' + lang +'_large.mat'
+            large_vocabfile = out_dir +'vocab' + pos + '_' + corpus_name + '_' + lang +'_large.txt'
+            try:
+                mat_dict = scipy.io.loadmat(large_matfile)
+                wordvec_pos = mat_dict['WP']
+                docvec_pos = mat_dict['WDP']
+                print type + ': loading .mat'
+                vocab_pos = file_to_list(large_vocabfile)
+                open('/u/metanet/clustering/multilingual_opinions/stage2.txt', 'a').write(lang+' '+type+' loaded mat\n')
+            except:
+                print type + ': .mat not found'
+                open('/u/metanet/clustering/multilingual_opinions/stage2.txt', 'a').write(lang+' '+type+' making mat\n')
+                (wordvec_pos, docvec_pos, vocab_pos) = matrixbuild(open(in_filename,'r'), max_doc_length, max_docs)
+                scipy.io.savemat(large_matfile, mdict = {'WP':wordvec_pos, 'WDP':docvec_pos})
+                write_to_string(vocab_pos, large_vocabfile)
+                open('/u/metanet/clustering/multilingual_opinions/stage2.txt', 'a').write(lang+' '+type+'finished making mat\n')
+
+            ## APPEND the FOLLOWING TO THE CORRECT WORD TYPE
+            for word in vocab_pos:
+                vocab1[type].append(word)
+            open('/u/metanet/clustering/multilingual_opinions/log2.txt', 'a').write(lang+' '+type+'vocab appended\n')
+            if len(wordvec[type])==0:
+                wordvec[type] = wordvec_pos
+            else:
+                wordvec[type] = numpy.concatenate([wordvec[type], wordvec_pos + oldmax])
+            open('/u/metanet/clustering/multilingual_opinions/log2.txt', 'a').write(lang+' '+type+'wordvec appended\n')
+            oldmax = numpy.max(wordvec[type])+1
+            if len(docvec[type])==0:
+                docvec[type] = docvec_pos
+            else:
+                docvec[type] = numpy.concatenate([docvec[type], docvec_pos])
+            open('/u/metanet/clustering/multilingual_opinions/log2.txt', 'a').write(lang+' '+type+'docvec appended\n')
+        try:
+            a = scipy.io.loadmat(out_dir + 'wordcounter_'+type+lang+'.mat')
+            wordcounts[type] = a['a']
+        except:
+            open('/u/metanet/clustering/multilingual_opinions/log2.txt', 'a').write(lang+' '+type+'about to run wordcounter\n')
+            wordcounts[type] = wordcounter(wordvec[type])
+            scipy.io.savemat(out_dir + 'wordcounter_'+type+lang+'.mat', {'a': wordcounts[type]})
+        open('/u/metanet/clustering/multilingual_opinions/log2.txt', 'a').write(lang+' '+type+'ran wordcounter\n')
+        print('wordcounts:'+ str(len(wordcounts[type])))
+        min_tokens[type] = min(min_tokens[type], numpy.max(wordcounts[type]))        
+        (min_tokens[type], max_tokens[type]) = find_limit(min_tokens[type], max_tokens[type], wordcounts[type])
+        print '\n cutoffs: ', str(min_tokens[type]) + ' - ' +str(max_tokens[type])
+        small_vocabfile = out_dir +'vocab_' + type_str[type] + '_' + corpus_name + '_' + lang +'_small.txt'
+        try:
+            vocab_shorter[type] = file_to_list(small_vocabfile)
+        except:
+            vocab_shorter[type] = shorten_vocab(wordcounts[type], min_tokens[type], max_tokens[type], vocab1[type])
+            write_to_string(vocab_shorter[type], small_vocabfile) 
+    ## THE FOLLOWING DEPENDS ON THE TOPIC WORDS SO IT'S OUT OF THE LOOP
+    (wordvec, docvec) = shorten_vectors(wordcounts, wordvec, docvec, min_tokens, max_tokens, min_doc_length, wordtypes)
+	
+    for type in wordtypes:	
+        small_matfile = out_dir + type_str[type] + '_' + corpus_name+'_' + lang +'_small.mat'
+        scipy.io.savemat(small_matfile, mdict =  {'WP':wordvec[type], 'WDP':docvec[type]})    
+        
+def matrixbuild(infile, max_doc_length, max_docs):
+# Builds a vector of the word type identities of each word token, and a vector of the document identities of each word token
+    doccount = 0 
+    wordcount = 0
+    vocab = []
+    voccount = 0
+    ansatz = 1e8
+    wordvector = numpy.zeros(ansatz)
+    docvector = numpy.zeros(ansatz)
+    for line in infile:
+        words_in_doc = line.split()
+        doccount = doccount + 1
+        if doccount<=max_docs:
+            counter3 = 0
+            for word in words_in_doc:
+                if counter3 <=max_doc_length:
+                    try: 
+                        wordvector[wordcount] = vocab.index(word) + 1 
+                    except:
+                        vocab.append(word)
+                        wordvector[wordcount] = vocab.index(word) + 1    
+                    voccount = voccount + 1
+                    docvector[wordcount] = doccount
+                    wordcount = wordcount + 1
+                    counter3 = counter3 + 1
+    wordvector = wordvector[:wordcount]
+    docvector = docvector[:wordcount]
+    return (wordvector, docvector, vocab)
+
+def write_to_string(list1, file1):
+    string1 = ''
+    for word in list1:
+        string1 += ' '+word
+    outfile = open(file1, 'w')
+    outfile.write(string1)
+    outfile.close()
+
+def wordcounter(word_vector):
+    voccount = int(numpy.max(word_vector)) + 1
+    wordcounts = numpy.zeros(voccount)
+    open('log2.txt', 'a').write('voccount: '+str(voccount)+'\n')
+    largestcount = 0
+    for i in range(int(voccount)):
+        wordcounts[i] = sum(1 for j in word_vector if (j-1)==i)
+#        open('log3.txt', 'a').write('word: '+str(i)+'\n')
+    return (wordcounts)
+	
+def find_limit(min_tokens, max_tokens, wordcounts):
+    totalgreater = 0   
+    min_limit = numpy.max(wordcounts)
+    max_limit = numpy.max(wordcounts)
+    while totalgreater>max_tokens:
+        max_limit = max_limit -1
+        totalgreater = sum(1 for j in wordcounts if j>max_limit)
+    while totalgreater<min_tokens:
+        min_limit = min_limit - 1
+        totalgreater = sum(1 for j in wordcounts if (j>min_limit)&(j<max_limit)) 
+    print 'max limit: '+ str(max_limit) + '\t min limit: ' + str(min_limit)
+    return (min_limit, max_limit)
+	
+def file_to_list(filename):
+    file1 = open(filename, 'r')
+    list1 = []
+    for line in file1:
+        split_line = line.split()
+        for word in split_line:
+           list1.append(word)
+    return list1
+def shorten_vocab(wordcounts, min_tokens, max_tokens, vocab1):
+ # Returns the shortened vocab list consisting of the words between the frequency cutoffs min_tokens and max_tokens 
+    vocab_shorter = []
+    counter = 0
+    word_index = 0      
+    for count in wordcounts:
+#        open('log.txt', 'a').write(str(count) + '\n')    
+        if count >= min_tokens:
+            if count <= max_tokens:
+                counter = counter + 1
+                vocab_shorter.append(vocab1[word_index])
+        word_index +=1
+    return vocab_shorter
+	
+def shorten_vectors(wordcounts, wordvec, docvec, min_tokens, max_tokens, min_doc_length, wordtypes):
+    #Find words that pass the freq threshhold and assign them new consecutive indices
+    counter1 = 0
+    wordvec_shorter, docvec_shorter, counts_per_doc = {}, {}, {}
+    for type in wordtypes:
+        try:
+            a = scipy.io.loadmat(out_dir1 + 'vec_shorters_'+type+'_'+lang+'.mat')
+            wordvec_shorter[type] = a['wordvec_shorter']
+            docvec_shorter[type] = a['docvec_shorter']
+            counts_per_doc['topic'] = numpy.zeros(numpy.max(docvec['topic']))
+            counter1 = 0
+            for i in range(len(wordvec['topic'])):
+                word_id = wordvec['topic'][i]
+                doc_id = docvec['topic'][i]
+                if wordcounts['topic'][int(word_id - 1)] >= min_tokens[type]:
+                    if wordcounts['topic'][int(word_id - 1)] <= max_tokens[type]:
+                        counts_per_doc['topic'][int(doc_id - 1)] += 1 
+                        counter1 += 1
+        except:
+            open('log.txt', 'a').write('loading failed. shortening phase I: '+lang + '\n')
+            for type in wordtypes:
+                wordvec_shorter[type] = wordvec[type]
+                docvec_shorter[type] = docvec[type]
+                counts_per_doc[type] = numpy.zeros(numpy.max(docvec[type]))
+                open(lang + 'log.txt', 'a').write('shortening phase I: '+lang+ ' '+ type+'\n') # str(word_id)+'\n')
+                # find documents with topic words above the frequency threshhold; remove any words below threshhold
+                counter1 = 0
+                for i in range(len(wordvec[type])):
+                    word_id = wordvec[type][i]
+                    doc_id = docvec[type][i]
+                    open(lang + 'log.txt', 'a').write('word_id: ' + str(word_id)+'\n')
+                    if wordcounts[type][int(word_id - 1)] >= min_tokens[type]:
+                        if wordcounts[type][int(word_id - 1)] <= max_tokens[type]:
+                            wordvec_shorter[type][counter1] = word_id
+                            docvec_shorter[type][counter1] = doc_id
+                            counts_per_doc[type][int(doc_id - 1)] += 1 
+                            counter1 += 1
+                wordvec_shorter[type] = wordvec_shorter[type][:counter1]
+                docvec_shorter[type] = docvec_shorter[type][:counter1]
+                scipy.io.savemat(out_dir1 + 'vec_shorters_'+type+'_'+lang+'.mat', {'wordvec_shorter': wordvec_shorter[type], 'docvec_shorter': docvec_shorter[type]})
+# throw out elements that are not in a doc with sufficient topic words above threshhold
+    doc_lists = []  # The doc_list has to be the same for both wordtypes!
+    scipy.io.savemat(out_dir1 + 'counts_per_doc' + lang + '.mat', {'counts_per_doc':counts_per_doc['topic']})
+    for type in wordtypes:
+        open('log.txt', 'a').write('shortening phase II: '+lang+ ' '+ type+'\n') # str(word_id)+'\n')        
+        word_lists = [] # the word_list is different for the two wordtypes
+        counter2 = 0
+        try:
+            for i in range(len(wordvec_shorter[type])):
+                doc_id = docvec_shorter[type][i]
+                if counts_per_doc['topic'][int(doc_id - 1)]>=min_doc_length:
+                    word_id = wordvec_shorter[type][i]
+                    try:
+                        word_id = word_lists.index(word_id)
+                    except:
+                        open(lang+'log.txt', 'a').write('word id: '+ str(word_id)+ '\n')
+                        word_lists.append(word_id)
+                        word_id = word_lists.index(word_id)
+                    try:
+                        doc_id = doc_lists.index(doc_id)
+                    except:
+                        open(lang+'log.txt', 'a').write('doc id: '+ str(doc_id)+ '\n')
+                        doc_lists.append(doc_id)
+                        doc_id = doc_lists.index(doc_id)
+                    wordvec_shorter[type][counter2] = word_id
+                    docvec_shorter[type][counter2] = doc_id
+                    counter2 +=1	
+            wordvec_shorter[type] = wordvec_shorter[type][:counter2]
+            docvec_shorter[type] = docvec_shorter[type][:counter2]
+        except:
+            open(lang+'log.txt', 'a').write('Error on doc id: '+ str(doc_id)+ ' type: ' +type + '\n')
+            wordvec_shorter[type] = wordvec_shorter[type][:counter2]
+            docvec_shorter[type] = docvec_shorter[type][:counter2]
+                      
+    return (wordvec_shorter, docvec_shorter)
+
+compute_vecs(lang, min_tokens, max_tokens, wordtypes)

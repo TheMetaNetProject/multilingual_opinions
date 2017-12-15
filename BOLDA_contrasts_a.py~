@@ -1,0 +1,63 @@
+import string
+import scipy
+
+##USE AFTER BOLDA_RESULTS.M ##
+
+lang1 = ['en', 'eng']
+lang2 = ['es', 'spa']
+#o_condition = ['_verbsonly', 'verb']
+o_condition = ['_adjectives', 'adjective']
+
+
+extrasuffix = '_nocomments'
+
+basedir_in = '/u/metanet/clustering/multilingual_opinions/prune_out/'
+#basedir1 = 'C:/Users/e4gutier/Downloads/'
+
+basedir_dictionary = '/u/metanet/clustering/multilingual_opinions/dictionaries/'
+#basedir_dictionary = 'C:/Users/e4gutier/Downloads/'
+basedir_out = basedir_in;
+
+vocabfilename_1 = basedir_in+'o_vocab_'+str(lang1[0])+str(o_condition[0])+'_short'+extrasuffix+'.txt'
+vocabfilename_2 = basedir_in+'o_vocab_'+str(lang2[0])+str(o_condition[0])+'_short'+extrasuffix+'.txt'
+outfilename = basedir_out + 'vocab_matches_'+str(lang1[0])+'-'+str(lang2[0])+str(o_condition[0])+'_20130301.csv'
+
+o_vocabfile_1 = open(vocabfilename_1,'r')
+o_vocabfile_2 = open(vocabfilename_2,'r')
+
+dicfile = open(basedir_dictionary+'dict-'+str(lang1[1])+'-'+str(lang2[1])+'-'+str(o_condition[1])+'.tsv','r')
+
+o_vocab_1 = []
+for line in o_vocabfile_1:
+    words = line.split()
+    for word in words:
+        o_vocab_1.append(word)
+#o_vocab_1 = o_vocab_1[0] # SOMETIMES THIS LINE AND THE ONE BELOW ARE NEEDED ....
+#print o_vocab_1
+
+o_vocab_2 = []
+for line in o_vocabfile_2:
+    words = line.split()
+    for word in words:
+        o_vocab_2.append(word)
+#o_vocab_2 = o_vocab_2[0]  # SOMETIMES THIS LINE AND THE ONE ABOVE ARE NEEDED ....
+#print o_vocab_2
+
+line_out = ''
+for line in dicfile:
+    line_in = line.split()
+    try:
+        a = o_vocab_1.index(line_in[0])  # sees if this entry in the dictionary matches entries in the word lists
+        b = o_vocab_2.index(line_in[1])
+        if (a>-1)&(b>-1):
+            line_out = line_out + str(a)+','+str(b)+'\n'
+            print line_in[0]+' '+str(a)+' '+line_in[1]+' '+str(b)
+    except:
+        1
+#print line_out
+
+outfile = open(outfilename, 'w')
+outfile.write(line_out)
+outfile.close()
+
+        

@@ -1,0 +1,37 @@
+basedir_results = '/u/metanet/clustering/multilingual_opinions/'
+basedir_dict = '/u/metanet/clustering/multilingual_opinions/prune_out/'
+o_condition = '_adjectives_20130513';
+lang1 = {'en','EN'};
+lang2 = {'es', 'ES'};
+
+load([basedir_results, lang1{1},'_', lang2{1}, '_BOLDAresults_T-75_MaxDocs-8e4_gamma-40e-3_noactivematch_verbsonly_nocomments_20130515.mat'])
+o_matches = csvread([basedir_di'ct,'vocab_matches_',lang1{1},'-',lang2{1},o_condition,'.csv'])+1;
+temp_OP1 = OP(1:Voc_O1,:);
+temp_OP2 = OP((Voc_O1+1):end,:);
+scores = zeros(size(o_matches,1),size(OP,2));
+for topic = 1:size(OP,2)
+    N1 = sum(temp_OP1(:,topic));
+    N2 = sum(temp_OP2(:,topic));
+    memo = zeros(N1+1,N2+1);
+    temp_OP1(:,topic) = temp_OP1(:,topic)/N1;
+    temp_OP2(:,topic) = temp_OP2(:,topic)/N2;
+    for i = 1:size(o_matches,1)
+        omatch1 = o_matches(i,1);
+        omatch2 = o_matches(i,2);
+        try
+            diff = abs(temp_OP1(omatch1,topic) - temp_OP2(omatch2,topic));
+            tic()
+            [scores(i,topic), memo] = diffprob(diff, N1, N2, beta_O, beta_O*mean(Voc_O1, size(OP,1)-Voc_O1), memo);        
+            toc()
+            if isnan(scores(i,topic))
+                break
+            end
+        catch
+            [omatch1, omatch2]
+        end
+    end
+    if isnan(scores(i,topic))
+        break
+    end
+   save(['scores',lang1{1},'-',lang2{1},o_condition,'_20130802.mat'], 'scores')
+end
